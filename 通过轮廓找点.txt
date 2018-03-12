@@ -1,0 +1,107 @@
+vector<Point> axisSort(const vector<vector<Point>>& contours);
+vector<Point> findCrossPoint(const vector<vector<Point>>& contours);//根据轮廓提取4个顶点
+
+void doFindcontours();//轮廓提取
+
+struct CmpContoursSize//轮廓大小排序
+{
+	bool operator()(const vector<Point>& lhs, const vector<Point>& rhs) const
+	{
+		return lhs.size() > rhs.size();
+	}
+};
+
+//通过轮廓提取得到四个顶点
+vector<Point> PPTRestore::Ximpl::axisSort(const vector<vector<Point>>& contours)
+{
+	vector<Point> points(contours.size() * contours[0].size());
+	for (auto i : contours)
+	for (auto j : i)
+		points.push_back(j);
+	points = this->pointsFilter(points);//对自己过滤一次
+	points.erase(remove(points.begin(), points.end(), Point(0, 0)), points.end());
+	sort(points.begin(), points.end(), CmpDistanceToZero());
+	return points;
+}
+void PPTRestore::Ximpl::doFindcontours()
+{
+	const float approachMaxThreshold = 20;
+	Mat result(this->midImage.size(), CV_8U, Scalar(0));
+	vector<vector<Point>> contours;
+	findContours(this->midImage, contours, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_NONE);
+	sort(contours.begin(), contours.end(), CmpContoursSize());
+	for (size_t i = 0; i < 5; ++i)//去除贴近图像边缘的轮廓
+	{
+		size_t j = contours[i].size();
+		if (contours[i][j / 5].y - 0 < approachMaxThreshold || this->midImage.cols - contours[i][j / 2].x < approachMaxThreshold)
+			contours.erase(remove(contours.begin(), contours.end(), contours[i]), contours.end());
+	}
+	vector<vector<Point>> biggestContours;
+	for (size_t i = 0; i < 3; ++i)
+		biggestContours.push_back(contours[i]);
+	drawContours(result, biggestContours, -1, Scalar(255), 2);
+//	imshow("轮廓提取", result);
+	this->findCrossPoint(biggestContours);//通过大轮廓找到交点
+	/*this->candidatePoint.push_back(Point(250, 0));
+	this->candidatePoint.push_back(Point(512, 159));
+	this->candidatePoint.push_back(Point(186, 736));
+	this->candidatePoint.push_back(Point(475, 637));*/
+}
+vector<Point> PPTRestore::Ximpl::findCrossPoint(const vector<vector<Point>>& contours)//通过轮廓找点
+{
+	int imageState;//图片如何倾斜
+	vector<Point> temp = this->axisSort(contours);
+	Point leftTop, trueRightTop, trueLeftDown, rightDown;//左上和右下可以直接判断
+	vector<Point> rightTop(temp.size());
+	vector<Point> leftDown(temp.size());//左下和右上有多个点可能符合
+	//对PPT照片而言，一定是左上角离原点最近，右下角离原点最远
+	leftTop.x = temp[0].x;
+	leftTop.y = temp[0].y;
+	rightDown.x = temp[temp.size() - 1].x;
+	rightDown.y = temp[temp.size() - 1].y;
+
+	for (auto & i : temp)
+	if (i.x > leftTop.x && i.y < rightDown.y)
+		rightTop.push_back(i);
+	for (auto & i : temp)
+	if (i.y > leftTop.y && i.x < rightDown.x)
+		leftDown.push_back(i);
+
+	if (rightTop.end() == find_if(rightTop.begin(), rightTop.end(), [leftTop, rightTop](Point p){return p.y < leftTop.y; }))
+		imageState = imageStyle::leanToRight;//如果所有右上点的y值都 > 左上点的y值 ，说明图像向右倾斜
+	else
+		imageState = imageStyle::leanToLeft;
+
+	if (imageState == imageStyle::leanToRight)//向右倾斜
+	{
+		sort(rightTop.begin(), rightTop.end(), [rightTop](Point p1, Point p2){return p1.x > p2.x; });//对所有右上点按X值排序，X最大的就是真正的右上点
+		rightTop.erase(remove(rightTop.begin(), rightTop.end(), Point(0, 0)), rightTop.end());
+		trueRightTop = rightTop[0];
+		sort(leftDown.begin(), leftDown.end(), [leftDown](Point p1, Point p2){return p1.x < p2.x; });//对所有左下点按X值排序，X最小的就是真正的左下点
+		leftDown.erase(remove(leftDown.begin(), leftDown.end(), Point(0, 0)), leftDown.end());
+		trueLeftDown = leftDown[0];
+	}
+	else //向左倾斜
+	{
+		sort(rightTop.begin(), rightTop.end(), [rightTop](Point p1, Point p2){return p1.y < p2.y; });//对所有右上点按Y值排序，Y最小的就是真正的右上点
+		rightTop.erase(remove(rightTop.begin(), rightTop.end(), Point(0, 0)), rightTop.end());
+		trueRightTop = rightTop[0];
+		sort(leftDown.begin(), leftDown.end(), [leftDown](Point p1, Point p2){return p1.y > p2.y; });//对所有左下点按Y值排序，Y最大的就是真正的左下点
+		leftDown.erase(remove(leftDown.begin(), leftDown.end(), Point(0, 0)), leftDown.end());
+		trueLeftDown = leftDown[0];
+	}
+
+	//ofstream fout("result.txt");
+	//for (auto i : leftDown)
+	//	fout << "左下还有：" << i.x << " " << i.y << endl;
+
+	//cout << "右上点：" << trueRightTop << endl
+	//	<< "左下点：" << trueLeftDown << endl;
+
+
+	this->resultPointsByContours.push_back(leftTop);
+	this->resultPointsByContours.push_back(trueRightTop);
+	this->resultPointsByContours.push_back(trueLeftDown);
+	this->resultPointsByContours.push_back(rightDown);
+	return this->resultPointsByContours;
+}
